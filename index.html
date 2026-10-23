@@ -308,5 +308,28 @@
 
     window.addEventListener("resize", resizeCanvas);
   </script>
+  
+<script>
+  const startButton = document.getElementById("start");
+  const statusBox = document.getElementById("status");
+
+  startButton.addEventListener("click", function () {
+    statusBox.textContent =
+      "Button works! Checking the hand-tracking script...";
+  });
+
+  window.addEventListener("error", function (event) {
+    statusBox.textContent =
+      "JavaScript error: " + (event.message || "Script failed to load");
+  });
+
+  window.addEventListener("unhandledrejection", function (event) {
+    const reason = event.reason;
+    statusBox.textContent =
+      "Loading error: " +
+      (reason?.message || String(reason));
+  });
+</script>
 </body>
 </html>
+

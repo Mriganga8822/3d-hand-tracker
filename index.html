@@ -1,0 +1,312 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080d1b">
+  <title>3D Hand Tracker</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #080d1b;
+      color: #f4f7ff;
+      font-family: system-ui, sans-serif;
+      text-align: center;
+    }
+
+    header { padding: 22px 14px 10px; }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(25px, 6vw, 36px);
+    }
+
+    header p { color: #a9b6d3; }
+
+    main {
+      width: min(94%, 720px);
+      margin: auto;
+    }
+
+    .camera-box {
+      position: relative;
+      overflow: hidden;
+      background: #101a30;
+      border: 1px solid #344361;
+      border-radius: 18px;
+      aspect-ratio: 4 / 3;
+    }
+
+    video, canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    video {
+      transform: scaleX(-1);
+    }
+
+    canvas { pointer-events: none; }
+
+    #status {
+      padding: 12px;
+      margin: 12px 0;
+      background: #111d34;
+      border-radius: 12px;
+      color: #c5d4f5;
+      overflow-wrap: anywhere;
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 13px 20px;
+      margin: 5px;
+      font-size: 16px;
+      font-weight: 700;
+      color: white;
+      background: #6559f5;
+    }
+
+    button:disabled {
+      opacity: .5;
+    }
+
+    .hint {
+      color: #a9b6d3;
+      font-size: 14px;
+      line-height: 1.6;
+      padding: 12px 4px 25px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>✋ 3D Hand Tracker</h1>
+    <p>Real-time hand tracking · MediaPipe</p>
+  </header>
+
+  <main>
+    <div class="camera-box">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="status">Ready to start camera.</div>
+
+    <button id="start">Start Camera</button>
+    <button id="stop" disabled>Stop Camera</button>
+
+    <p class="hint">
+      Place one hand in front of the camera.
+      Keep your fingers visible and use good lighting.
+      Green dots and lines will show detected hand landmarks.
+    </p>
+  </main>
+
+  <script type="module">
+    import {
+      HandLandmarker,
+      FilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22";
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+    const startButton = document.getElementById("start");
+    const stopButton = document.getElementById("stop");
+
+    let handLandmarker = null;
+    let stream = null;
+    let running = false;
+    let busy = false;
+    let lastVideoTime = -1;
+    let lastError = "";
+
+    const connections = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [5,9],[9,10],[10,11],[11,12],
+      [9,13],[13,14],[14,15],[15,16],
+      [13,17],[0,17],[17,18],[18,19],
+      [19,20],[0,1]
+    ];
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+    }
+
+    function drawLandmarks(landmarks) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (!landmarks || landmarks.length === 0) {
+        status.textContent = "Camera running — show your hand.";
+        return;
+      }
+
+      // Mirror landmark positions to match the mirrored selfie video.
+      const points = landmarks[0].map(p => ({
+        x: (1 - p.x) * canvas.width,
+        y: p.y * canvas.height
+      }));
+
+      ctx.lineWidth = Math.max(2, canvas.width / 250);
+      ctx.strokeStyle = "#35f5a1";
+      ctx.lineCap = "round";
+
+      for (const [a, b] of connections) {
+        ctx.beginPath();
+        ctx.moveTo(points[a].x, points[a].y);
+        ctx.lineTo(points[b].x, points[b].y);
+        ctx.stroke();
+      }
+
+      for (const p of points) {
+        ctx.beginPath();
+        ctx.arc(
+          p.x, p.y,
+          Math.max(3, canvas.width / 115),
+          0, Math.PI * 2
+        );
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(
+          p.x, p.y,
+          Math.max(2, canvas.width / 180),
+          0, Math.PI * 2
+        );
+        ctx.fillStyle = "#00e891";
+        ctx.fill();
+      }
+
+      status.textContent =
+        "Hand detected! Tracking 21 landmarks.";
+    }
+
+    async function trackFrame() {
+      if (!running) return;
+
+      if (
+        !busy &&
+        handLandmarker &&
+        video.readyState >= 2 &&
+        video.currentTime !== lastVideoTime
+      ) {
+        busy = true;
+        lastVideoTime = video.currentTime;
+
+        try {
+          const result = handLandmarker.detectForVideo(
+            video,
+            performance.now()
+          );
+
+          drawLandmarks(result.landmarks);
+        } catch (error) {
+          console.error(error);
+          status.textContent = "Tracking error. Please restart.";
+        } finally {
+          busy = false;
+        }
+      }
+
+      if (running) requestAnimationFrame(trackFrame);
+    }
+
+    startButton.addEventListener("click", async () => {
+      startButton.disabled = true;
+      status.textContent = "Loading hand-tracking model...";
+
+      try {
+        if (!window.isSecureContext) {
+          throw new Error("Open this website through HTTPS.");
+        }
+
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
+        );
+
+        if (!handLandmarker) {
+          handLandmarker = await HandLandmarker.createFromOptions(
+            vision,
+            {
+              baseOptions: {
+                modelAssetPath:
+                  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              numHands: 1,
+              minHandDetectionConfidence: 0.5,
+              minHandPresenceConfidence: 0.5,
+              minTrackingConfidence: 0.5
+            }
+          );
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        resizeCanvas();
+        running = true;
+        stopButton.disabled = false;
+        status.textContent = "Camera running — show your hand.";
+        requestAnimationFrame(trackFrame);
+
+      } catch (error) {
+        console.error(error);
+        status.textContent =
+          "Could not start: " + error.message +
+          ". Check HTTPS, camera permission and internet.";
+
+        startButton.disabled = false;
+
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          stream = null;
+        }
+      }
+    });
+
+    stopButton.addEventListener("click", () => {
+      running = false;
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      status.textContent = "Camera stopped.";
+      startButton.disabled = false;
+      stopButton.disabled = true;
+    });
+
+    window.addEventListener("resize", resizeCanvas);
+  </script>
+</body>
+</html>
